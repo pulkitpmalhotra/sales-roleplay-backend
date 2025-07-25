@@ -1,0 +1,31 @@
+{
+  "name": "sales-roleplay-backend",
+  "version": "1.0.0",
+  "description": "AI-powered sales roleplay practice backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "google-spreadsheet": "^4.1.2",
+    "google-auth-library": "^9.4.1",
+    "firebase-admin": "^12.0.0",
+    "openai": "^4.24.1",
+    "axios": "^1.6.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "sales",
+    "roleplay",
+    "ai",
+    "training",
+    "video"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
+}
