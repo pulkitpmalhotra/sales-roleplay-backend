@@ -464,9 +464,20 @@ app.post('/api/sessions/start', authenticateToken, async (req, res) => {
   try {
     const { scenarioId, roomUrl } = req.body;
     
+    const sessionId = `session_${Date.now()}_${req.user.uid}`;
+    console.log('🔍 ===== SESSION START DEBUG =====');
+    console.log('🔍 Creating session:', sessionId);
+    console.log('🔍 User ID:', req.user.uid);
+    console.log('🔍 Scenario ID:', scenarioId);
+    
     const sessionsSheet = doc.sheetsByTitle['Sessions'];
+    if (!sessionsSheet) {
+      console.error('❌ Sessions sheet not found');
+      return res.status(500).json({ error: 'Sessions sheet not found' });
+    }
+    
     const session = await sessionsSheet.addRow({
-      id: `session_${Date.now()}`,
+      id: sessionId,
       userId: req.user.uid,
       scenarioId: scenarioId,
       roomUrl: roomUrl,
@@ -474,36 +485,42 @@ app.post('/api/sessions/start', authenticateToken, async (req, res) => {
       status: 'active'
     });
     
+    console.log('✅ Session created successfully:', sessionId);
+    console.log('🔍 ===== SESSION START COMPLETE =====');
+    
     res.json({
-      sessionId: session.get('id'),
+      sessionId: sessionId,
       status: 'started'
     });
   } catch (error) {
-    console.error('Error starting session:', error);
-    res.status(500).json({ error: 'Failed to start session' });
+    console.error('❌ Error starting session:', error);
+    res.status(500).json({ error: 'Failed to start session', details: error.message });
   }
 });
-
 // End session and analyze
-// In your server.js, update the /api/sessions/end endpoint:
+// /api/sessions/end endpoint:
 app.post('/api/sessions/end', authenticateToken, async (req, res) => {
   try {
     const { sessionId, transcript, duration, conversationHistory = [] } = req.body;
     
-    console.log('Ending session:', sessionId); // Debug log
+    console.log('🔍 ===== SESSION END DEBUG =====');
+    console.log('🔍 Session ID:', sessionId);
+    console.log('🔍 User ID:', req.user.uid);
+    console.log('🔍 Duration:', duration);
+    console.log('🔍 Conversation length:', conversationHistory.length);
+    console.log('🔍 Transcript length:', transcript?.length || 0);
+    
+    if (!sessionId) {
+      console.error('❌ No session ID provided');
+      return res.status(400).json({ error: 'Session ID required' });
+    }
     
     // Redact PII from transcript
-    const redactedTranscript = redactPII(transcript);
+    const redactedTranscript = redactPII(transcript || '');
     
     // Basic analysis
-    const analysis = analyzeSession(redactedTranscript);
-    
-    // Enhanced analysis with conversation data
-    if (conversationHistory.length > 0) {
-      analysis.conversationLength = conversationHistory.length;
-      analysis.userMessages = conversationHistory.filter(msg => msg.speaker === 'user').length;
-      analysis.aiMessages = conversationHistory.filter(msg => msg.speaker === 'ai').length;
-    }
+    const analysis = analyzeSession(redactedTranscript, conversationHistory);
+    console.log('🔍 Analysis result:', analysis);
     
     // Get AI feedback
     let aiFeedback = '';
@@ -512,74 +529,121 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
         .map(msg => `${msg.speaker === 'user' ? 'Salesperson' : 'Customer'}: ${msg.message}`)
         .join('\n');
       
-      const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [{
-          role: "system",
-          content: "You are a sales coach. Analyze this sales roleplay conversation and provide constructive feedback on communication skills, persuasion techniques, and areas for improvement. Keep it concise and actionable."
-        }, {
-          role: "user",
-          content: `Please analyze this sales conversation:\n\n${conversationText.substring(0, 2000)}`
-        }],
-        max_tokens: 300
-      });
+      console.log('🔍 Conversation text length:', conversationText.length);
       
-      aiFeedback = completion.choices[0].message.content;
+      if (conversationText.length > 10) {
+        const completion = await openai.chat.completions.create({
+          model: "gpt-3.5-turbo",
+          messages: [{
+            role: "system",
+            content: "You are a sales coach. Analyze this sales roleplay conversation and provide constructive feedback on communication skills, persuasion techniques, and areas for improvement. Keep it concise and actionable."
+          }, {
+            role: "user",
+            content: `Please analyze this sales conversation:\n\n${conversationText.substring(0, 2000)}`
+          }],
+          max_tokens: 300
+        });
+        
+        aiFeedback = completion.choices[0].message.content;
+        console.log('✅ AI feedback generated');
+      } else {
+        aiFeedback = "Great job starting the conversation! Try to engage more with the customer to get detailed feedback.";
+        console.log('ℹ️ Using default feedback - conversation too short');
+      }
     } catch (error) {
-      console.error('OpenAI API error:', error);
-      aiFeedback = 'AI analysis temporarily unavailable. Please try again later.';
+      console.error('❌ OpenAI API error:', error);
+      aiFeedback = 'Session completed successfully. Keep practicing to improve your skills!';
     }
     
-    // Update session
-    const sessionsSheet = doc.sheetsByTitle['Sessions'];
-    const rows = await sessionsSheet.getRows();
-    const session = rows.find(row => row.get('id') === sessionId);
-    
-    if (session) {
-      session.set('endTime', new Date().toISOString());
-      session.set('duration', duration);
-      session.set('status', 'completed');
-      session.set('transcript', redactedTranscript);
-      await session.save();
-      console.log('Session updated successfully'); // Debug
-    } else {
-      console.log('Session not found in sheets:', sessionId); // Debug
+    // Update session in Google Sheets
+    console.log('🔍 Updating session in Google Sheets...');
+    try {
+      const sessionsSheet = doc.sheetsByTitle['Sessions'];
+      if (!sessionsSheet) {
+        console.error('❌ Sessions sheet not found');
+        throw new Error('Sessions sheet not found');
+      }
+      
+      const rows = await sessionsSheet.getRows();
+      console.log('🔍 Total rows in Sessions sheet:', rows.length);
+      
+      const session = rows.find(row => {
+        const rowId = row.get('id');
+        console.log('🔍 Checking row ID:', rowId, 'against session ID:', sessionId);
+        return rowId === sessionId;
+      });
+      
+      if (session) {
+        console.log('✅ Found session to update');
+        session.set('endTime', new Date().toISOString());
+        session.set('duration', duration);
+        session.set('status', 'completed');
+        session.set('transcript', redactedTranscript);
+        await session.save();
+        console.log('✅ Session updated successfully in sheets');
+      } else {
+        console.log('⚠️ Session not found in sheets. Available IDs:', 
+          rows.map(r => r.get('id')).slice(0, 5));
+        // Create new session if not found
+        await sessionsSheet.addRow({
+          id: sessionId,
+          userId: req.user.uid,
+          startTime: new Date(Date.now() - duration).toISOString(),
+          endTime: new Date().toISOString(),
+          duration: duration,
+          status: 'completed',
+          transcript: redactedTranscript
+        });
+        console.log('✅ Created new session row');
+      }
+    } catch (sheetError) {
+      console.error('❌ Error updating session in sheets:', sheetError);
     }
     
     // Save feedback
-    const feedbackSheet = doc.sheetsByTitle['Feedback'];
-    await feedbackSheet.addRow({
-      sessionId: sessionId,
-      userId: req.user.uid,
-      createdAt: new Date().toISOString(),
-      talkTimeRatio: analysis.talkTimeRatio,
-      fillerWordCount: analysis.fillerWordCount,
-      confidenceScore: analysis.confidenceScore,
-      aiFeedback: aiFeedback,
-      conversationLength: analysis.conversationLength || 0,
-      keyMetrics: JSON.stringify(analysis)
-    });
+    console.log('🔍 Saving feedback to Google Sheets...');
+    try {
+      const feedbackSheet = doc.sheetsByTitle['Feedback'];
+      if (!feedbackSheet) {
+        console.error('❌ Feedback sheet not found');
+        throw new Error('Feedback sheet not found');
+      }
+      
+      await feedbackSheet.addRow({
+        sessionId: sessionId,
+        userId: req.user.uid,
+        createdAt: new Date().toISOString(),
+        talkTimeRatio: analysis.talkTimeRatio,
+        fillerWordCount: analysis.fillerWordCount,
+        confidenceScore: analysis.confidenceScore,
+        aiFeedback: aiFeedback,
+        conversationLength: conversationHistory.length,
+        keyMetrics: JSON.stringify(analysis)
+      });
+      console.log('✅ Feedback saved successfully to sheets');
+    } catch (feedbackError) {
+      console.error('❌ Error saving feedback to sheets:', feedbackError);
+    }
     
-    console.log('Feedback saved successfully'); // Debug
-    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
-    const scenarioRows = await scenariosSheet.getRows();
-    const scenario = scenarioRows.find(row => 
-      row.get('scenario_id') === scenarioId || 
-      row.get('id') === scenarioId
-    );
+    const finalAnalysis = {
+      ...analysis,
+      aiFeedback: aiFeedback,
+      conversationLength: conversationHistory.length
+    };
+    
+    console.log('✅ Final analysis being sent:', finalAnalysis);
+    console.log('🔍 ===== SESSION END COMPLETE =====');
     
     res.json({
-      analysis: {
-        ...analysis,
-        aiFeedback: aiFeedback,
-        skillArea: scenario?.get('sales_skill_area') || 'Sales Skills', // Add this
-        scenarioTitle: scenario?.get('title') || 'Practice Session'
-      }
+      analysis: finalAnalysis
     });
     
   } catch (error) {
-    console.error('Error ending session:', error);
-    res.status(500).json({ error: 'Failed to end session' });
+    console.error('❌ Fatal error in session end:', error);
+    res.status(500).json({ 
+      error: 'Failed to end session', 
+      details: error.message 
+    });
   }
 });
 // Google Ads-specific session analysis
