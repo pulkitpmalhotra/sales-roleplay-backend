@@ -10,7 +10,21 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
+const corsOptions = {
+  origin: [
+    'https://sales-roleplay-frontend.vercel.app', // Replace with your actual Vercel URL
+    'http://localhost:3000',
+    'https://localhost:3000'
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+};
+
+app.use(cors(corsOptions));
+
+// Add explicit OPTIONS handler
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Initialize Firebase Admin
