@@ -105,7 +105,83 @@ async function authenticateToken(req, res, next) {
 }
 
 // Routes
+// Add after your existing routes
+app.post('/api/ai/chat', authenticateToken, async (req, res) => {
+  try {
+    const { sessionId, userMessage, scenarioId, conversationHistory = [] } = req.body;
+    
+    // Get scenario details
+    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    const rows = await scenariosSheet.getRows();
+    const scenario = rows.find(row => row.get('id') === scenarioId);
+    
+    if (!scenario) {
+      return res.status(404).json({ error: 'Scenario not found' });
+    }
+    
+    // Build conversation context
+    const systemPrompt = `You are ${scenario.get('title')} roleplay scenario. 
+    
+Character Details:
+- Name: Sarah Mitchell (Busy IT Director)
+- Company: Mid-size tech company (200 employees)
+- Personality: Skeptical, budget-conscious, time-pressed, results-oriented
+- Background: Had bad experiences with previous vendors, values efficiency
+- Current Situation: Evaluating new solutions but very busy
+- Pain Points: Current system is outdated, team productivity issues, budget constraints
 
+Instructions:
+- Respond as Sarah would in a real sales call
+- Be naturally skeptical but not hostile
+- Ask realistic business questions
+- Bring up common objections (budget, timing, current solutions)
+- Keep responses conversational and realistic (2-3 sentences max)
+- Show interest if the salesperson addresses your concerns well
+- Be more receptive if they demonstrate value and understanding
+
+Remember: You're in the middle of a busy workday and this is an unscheduled sales call.`;
+
+    // Build conversation history for context
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...conversationHistory.map(msg => ({
+        role: msg.speaker === 'user' ? 'user' : 'assistant',
+        content: msg.message
+      })),
+      { role: "user", content: userMessage }
+    ];
+    
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: messages,
+      max_tokens: 150,
+      temperature: 0.8 // Add some personality variation
+    });
+    
+    const aiResponse = completion.choices[0].message.content;
+    
+    // Log conversation for analysis
+    const feedbackSheet = doc.sheetsByTitle['Feedback'];
+    await feedbackSheet.addRow({
+      sessionId: sessionId,
+      userId: req.user.uid,
+      timestamp: new Date().toISOString(),
+      userMessage: userMessage,
+      aiResponse: aiResponse,
+      scenario: scenarioId
+    });
+    
+    res.json({
+      response: aiResponse,
+      character: "Sarah Mitchell",
+      emotion: "neutral" // Can be enhanced later
+    });
+    
+  } catch (error) {
+    console.error('Error generating AI response:', error);
+    res.status(500).json({ error: 'Failed to generate AI response' });
+  }
+});
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'Server is running', timestamp: new Date().toISOString() });
