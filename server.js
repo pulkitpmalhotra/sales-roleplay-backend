@@ -215,51 +215,81 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 // Get scenarios
 app.get('/api/scenarios', authenticateToken, async (req, res) => {
   try {
+    console.log('🔍 Scenarios endpoint called by user:', req.user.uid);
+    
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    if (!scenariosSheet) {
+      console.error('❌ Scenarios sheet not found');
+      return res.status(500).json({ error: 'Scenarios sheet not found' });
+    }
+    
     const rows = await scenariosSheet.getRows();
+    console.log('📊 Found rows:', rows.length);
     
-    const scenarios = rows
-      .filter(row => row.get('is_active') !== 'FALSE')
-      .map(row => ({
-        // Basic info
-        scenario_id: row.get('scenario_id') || row.get('id') || row.rowNumber.toString(),
-        id: row.get('id') || row.get('scenario_id') || row.rowNumber.toString(),
-        title: row.get('title'),
-        description: row.get('description'),
-        difficulty: row.get('difficulty') || 'Medium',
-        category: row.get('category') || 'General',
-        
-        // AI Character details
-        ai_character_name: row.get('ai_character_name'),
-        ai_character_role: row.get('ai_character_role'),
-        ai_character_personality: row.get('ai_character_personality'),
-        ai_character_background: row.get('ai_character_background'),
-        
-        // Google Ads specific
-        sales_skill_area: row.get('sales_skill_area'),
-        buyer_persona: row.get('buyer_persona'),
-        google_ads_focus: row.get('google_ads_focus'),
-        business_vertical: row.get('business_vertical'),
-        campaign_complexity: row.get('campaign_complexity'),
-        
-        // Training details
-        key_objections: row.get('key_objections') ? 
-          JSON.parse(row.get('key_objections').replace(/'/g, '"')) : [],
-        success_metrics: row.get('success_metrics'),
-        coaching_focus: row.get('coaching_focus'),
-        scenario_objectives: row.get('scenario_objectives'),
-        estimated_duration: parseInt(row.get('estimated_duration')) || 10,
-        ai_prompts: row.get('ai_prompts'),
-        usage_count: parseInt(row.get('usage_count')) || 0
-      }));
+    const scenarios = [];
     
-    res.json(scenarios);
-  } catch (error) {
-    console.error('Error fetching scenarios:', error);
-    res.status(500).json({ error: 'Failed to fetch scenarios' });
-  }
-});
-
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      
+      try {
+        // Check if row has basic required data
+        const title = row.get('title');
+        if (!title) {
+          console.log('⚠️ Skipping row without title:', row.rowNumber);
+          continue;
+        }
+        
+        // Parse key_objections safely
+        let keyObjections = [];
+        try {
+          const objectionsValue = row.get('key_objections');
+          if (objectionsValue) {
+            // Try to parse as JSON, with multiple fallback methods
+            let cleanValue = objectionsValue;
+            if (typeof cleanValue === 'string') {
+              // Replace single quotes with double quotes
+              cleanValue = cleanValue.replace(/'/g, '"');
+              // Remove any extra brackets
+              cleanValue = cleanValue.replace(/^\[|\]$/g, '');
+              // Split by comma if it's not proper JSON
+              if (!cleanValue.startsWith('[')) {
+                cleanValue = `[${cleanValue}]`;
+              }
+            }
+            keyObjections = JSON.parse(cleanValue);
+          }
+        } catch (parseError) {
+          console.log('⚠️ Could not parse key_objections for row', row.rowNumber, ':', row.get('key_objections'));
+          keyObjections = []; // Default to empty array
+        }
+        
+        const scenario = {
+          // Basic info (safe with fallbacks)
+          scenario_id: row.get('scenario_id') || row.get('id') || `scenario_${row.rowNumber}`,
+          id: row.get('id') || row.get('scenario_id') || row.rowNumber.toString(),
+          title: title,
+          description: row.get('description') || 'No description provided',
+          difficulty: row.get('difficulty') || 'Medium',
+          category: row.get('category') || 'General',
+          
+          // AI Character details (safe with fallbacks)
+          ai_character_name: row.get('ai_character_name') || 'Sarah Mitchell',
+          ai_character_role: row.get('ai_character_role') || 'Business Professional',
+          ai_character_personality: row.get('ai_character_personality') || 'Professional, helpful',
+          ai_character_background: row.get('ai_character_background') || 'Works in business',
+          
+          // Google Ads specific (safe with fallbacks)
+          sales_skill_area: row.get('sales_skill_area') || 'General Sales',
+          buyer_persona: row.get('buyer_persona') || 'Business Professional',
+          google_ads_focus: row.get('google_ads_focus') || 'General Marketing',
+          business_vertical: row.get('business_vertical') || 'General Business',
+          campaign_complexity: row.get('campaign_complexity') || 'Beginner',
+          
+          // Training details (safe with fallbacks)
+          key_objections: keyObjections,
+          success_metrics: row.get('success_metrics') || 'Complete the conversation successfully',
+          coaching_focus: row.get('coaching_focus') || 'General communication skills',
+          scenario_ob
 // Add this test endpoint to debug Google Sheets
 app.get('/api/test-sheets', authenticateToken, async (req, res) => {
   try {
