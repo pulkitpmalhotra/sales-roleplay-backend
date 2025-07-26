@@ -773,94 +773,126 @@ function generateCoachingRecommendations(analysis) {
 // Get user sessions
 app.get('/api/sessions/history', authenticateToken, async (req, res) => {
   try {
-    const { limit = 10, offset = 0, scenario, dateFrom, dateTo } = req.query;
+    const { limit = 10, offset = 0 } = req.query;
+    
+    console.log('🔍 ===== SESSIONS HISTORY DEBUG =====');
+    console.log('🔍 User requesting history:', req.user.uid);
+    console.log('🔍 Query params:', { limit, offset });
     
     const sessionsSheet = doc.sheetsByTitle['Sessions'];
     const feedbackSheet = doc.sheetsByTitle['Feedback'];
-    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
     
-    const [sessionRows, feedbackRows, scenarioRows] = await Promise.all([
+    if (!sessionsSheet) {
+      console.error('❌ Sessions sheet not found');
+      return res.status(500).json({ error: 'Sessions sheet not found' });
+    }
+    
+    if (!feedbackSheet) {
+      console.error('❌ Feedback sheet not found');
+      return res.status(500).json({ error: 'Feedback sheet not found' });
+    }
+    
+    const [sessionRows, feedbackRows] = await Promise.all([
       sessionsSheet.getRows(),
-      feedbackSheet.getRows(),
-      scenariosSheet.getRows()
+      feedbackSheet.getRows()
     ]);
     
-    // Get user sessions with enhanced data
-    let userSessions = sessionRows
-      .filter(row => row.get('userId') === req.user.uid)
-      .map(session => {
-        const feedback = feedbackRows.find(f => f.get('sessionId') === session.get('id'));
-        const scenarioData = scenarioRows.find(s => 
-          s.get('id') === session.get('scenarioId') || 
-          s.rowNumber.toString() === session.get('scenarioId')
-        );
-        
-        return {
-          id: session.get('id'),
-          scenarioId: session.get('scenarioId'),
-          scenarioTitle: scenarioData?.get('title') || 'Unknown Scenario',
-          scenarioCategory: scenarioData?.get('category') || 'General',
-          scenarioDifficulty: scenarioData?.get('difficulty') || 'Medium',
-          startTime: session.get('startTime'),
-          endTime: session.get('endTime'),
-          duration: parseInt(session.get('duration')) || 0,
-          status: session.get('status'),
-          feedback: feedback ? {
-            talkTimeRatio: parseInt(feedback.get('talkTimeRatio')) || 0,
-            fillerWordCount: parseInt(feedback.get('fillerWordCount')) || 0,
-            confidenceScore: parseInt(feedback.get('confidenceScore')) || 0,
-            conversationLength: parseInt(feedback.get('conversationLength')) || 0,
-            aiFeedback: feedback.get('aiFeedback')
-          } : null
-        };
-      })
-      .sort((a, b) => new Date(b.startTime) - new Date(a.startTime)); // Most recent first
+    console.log('🔍 Total session rows:', sessionRows.length);
+    console.log('🔍 Total feedback rows:', feedbackRows.length);
     
-    // Apply filters
-    if (scenario && scenario !== 'all') {
-      userSessions = userSessions.filter(s => s.scenarioId === scenario);
-    }
+    // Filter sessions for this user
+    const userSessions = sessionRows.filter(row => {
+      const rowUserId = row.get('userId');
+      const isMatch = rowUserId === req.user.uid;
+      if (isMatch) {
+        console.log('✅ Found user session:', row.get('id'), 'status:', row.get('status'));
+      }
+      return isMatch;
+    });
     
-    if (dateFrom) {
-      userSessions = userSessions.filter(s => new Date(s.startTime) >= new Date(dateFrom));
-    }
+    console.log('🔍 User sessions found:', userSessions.length);
     
-    if (dateTo) {
-      userSessions = userSessions.filter(s => new Date(s.startTime) <= new Date(dateTo));
-    }
+    // Map sessions with feedback
+    const sessionsWithFeedback = userSessions.map(session => {
+      const sessionId = session.get('id');
+      const feedback = feedbackRows.find(f => f.get('sessionId') === sessionId);
+      
+      console.log('🔍 Processing session:', sessionId, 'has feedback:', !!feedback);
+      
+      return {
+        id: sessionId,
+        scenarioId: session.get('scenarioId') || 'unknown',
+        scenarioTitle: `Practice Session ${sessionId.split('_')[1] || 'Unknown'}`,
+        scenarioCategory: 'General',
+        scenarioDifficulty: 'Medium',
+        startTime: session.get('startTime'),
+        endTime: session.get('endTime'),
+        duration: parseInt(session.get('duration')) || 0,
+        status: session.get('status') || 'completed',
+        feedback: feedback ? {
+          talkTimeRatio: parseInt(feedback.get('talkTimeRatio')) || 50,
+          fillerWordCount: parseInt(feedback.get('fillerWordCount')) || 0,
+          confidenceScore: parseInt(feedback.get('confidenceScore')) || 50,
+          conversationLength: parseInt(feedback.get('conversationLength')) || 0,
+          aiFeedback: feedback.get('aiFeedback')
+        } : null
+      };
+    });
     
-    // Pagination
-    const total = userSessions.length;
-    const paginatedSessions = userSessions.slice(parseInt(offset), parseInt(offset) + parseInt(limit));
+    // Sort by most recent first
+    sessionsWithFeedback.sort((a, b) => 
+      new Date(b.startTime || 0) - new Date(a.startTime || 0)
+    );
     
     // Calculate summary stats
-    const completedSessions = userSessions.filter(s => s.status === 'completed');
-    const avgConfidence = completedSessions.length > 0 
-      ? Math.round(completedSessions.reduce((sum, s) => sum + (s.feedback?.confidenceScore || 0), 0) / completedSessions.length)
+    const completedSessions = sessionsWithFeedback.filter(s => s.status === 'completed');
+    const avgConfidence = completedSessions.length > 0 && completedSessions.some(s => s.feedback?.confidenceScore)
+      ? Math.round(
+          completedSessions
+            .filter(s => s.feedback?.confidenceScore)
+            .reduce((sum, s) => sum + s.feedback.confidenceScore, 0) / 
+          completedSessions.filter(s => s.feedback?.confidenceScore).length
+        )
       : 0;
     
     const avgDuration = completedSessions.length > 0
-      ? Math.round(completedSessions.reduce((sum, s) => sum + s.duration, 0) / completedSessions.length / 60000) // minutes
+      ? Math.round(
+          completedSessions.reduce((sum, s) => sum + s.duration, 0) / 
+          completedSessions.length / 60000
+        ) // Convert to minutes
       : 0;
     
-    res.json({
+    // Apply pagination
+    const paginatedSessions = sessionsWithFeedback.slice(
+      parseInt(offset), 
+      parseInt(offset) + parseInt(limit)
+    );
+    
+    const result = {
       sessions: paginatedSessions,
       pagination: {
-        total,
+        total: sessionsWithFeedback.length,
         offset: parseInt(offset),
         limit: parseInt(limit),
-        hasMore: total > (parseInt(offset) + parseInt(limit))
+        hasMore: sessionsWithFeedback.length > (parseInt(offset) + parseInt(limit))
       },
       summary: {
-        totalSessions: total,
+        totalSessions: sessionsWithFeedback.length,
         completedSessions: completedSessions.length,
         avgConfidenceScore: avgConfidence,
         avgDurationMinutes: avgDuration
       }
-    });
+    };
+    
+    console.log('✅ Final result summary:', result.summary);
+    console.log('✅ Sessions being returned:', result.sessions.length);
+    console.log('🔍 ===== SESSIONS HISTORY COMPLETE =====');
+    
+    res.json(result);
+    
   } catch (error) {
-    console.error('Error fetching session history:', error);
-    res.status(500).json({ error: 'Failed to fetch session history' });
+    console.error('❌ Error fetching session history:', error);
+    res.status(500).json({ error: 'Failed to fetch session history', details: error.message });
   }
 });
 app.get('/api/sessions/:sessionId/details', authenticateToken, async (req, res) => {
