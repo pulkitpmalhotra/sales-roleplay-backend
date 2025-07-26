@@ -168,28 +168,42 @@ app.get('/api/scenarios', authenticateToken, async (req, res) => {
 // Create Daily.co room
 app.post('/api/video/create-room', authenticateToken, async (req, res) => {
   try {
-    const response = await axios.post('https://api.daily.co/v1/rooms', {
+    console.log('Creating Daily.co room for user:', req.user.uid); // Debug log
+    
+    const roomData = {
       name: `roleplay-${req.user.uid}-${Date.now()}`,
-      privacy: 'private',
+      privacy: 'public', // Changed from 'private' to 'public'
       properties: {
-        max_participants: 2,
+        max_participants: 10, // Increased from 2
         enable_recording: false,
-        enable_transcription: true
+        enable_transcription: false, // Disabled transcription
+        start_video_off: false,
+        start_audio_off: false,
+        enable_prejoin_ui: false
       }
-    }, {
+    };
+
+    console.log('Room data being sent to Daily.co:', roomData); // Debug log
+
+    const response = await axios.post('https://api.daily.co/v1/rooms', roomData, {
       headers: {
         'Authorization': `Bearer ${process.env.DAILY_API_KEY}`,
         'Content-Type': 'application/json'
       }
     });
     
+    console.log('Daily.co API response:', response.data); // Debug log
+    
     res.json({
       roomUrl: response.data.url,
       roomName: response.data.name
     });
   } catch (error) {
-    console.error('Error creating Daily.co room:', error);
-    res.status(500).json({ error: 'Failed to create video room' });
+    console.error('Error creating Daily.co room:', error.response?.data || error.message);
+    res.status(500).json({ 
+      error: 'Failed to create video room',
+      details: error.response?.data || error.message 
+    });
   }
 });
 
