@@ -309,9 +309,12 @@ app.post('/api/sessions/start', authenticateToken, async (req, res) => {
 });
 
 // End session and analyze
+// In your server.js, update the /api/sessions/end endpoint:
 app.post('/api/sessions/end', authenticateToken, async (req, res) => {
   try {
-    const { sessionId, transcript, duration } = req.body;
+    const { sessionId, transcript, duration, conversationHistory = [] } = req.body;
+    
+    console.log('Ending session:', sessionId); // Debug log
     
     // Redact PII from transcript
     const redactedTranscript = redactPII(transcript);
@@ -319,19 +322,30 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
     // Basic analysis
     const analysis = analyzeSession(redactedTranscript);
     
+    // Enhanced analysis with conversation data
+    if (conversationHistory.length > 0) {
+      analysis.conversationLength = conversationHistory.length;
+      analysis.userMessages = conversationHistory.filter(msg => msg.speaker === 'user').length;
+      analysis.aiMessages = conversationHistory.filter(msg => msg.speaker === 'ai').length;
+    }
+    
     // Get AI feedback
     let aiFeedback = '';
     try {
+      const conversationText = conversationHistory
+        .map(msg => `${msg.speaker === 'user' ? 'Salesperson' : 'Customer'}: ${msg.message}`)
+        .join('\n');
+      
       const completion = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
         messages: [{
           role: "system",
-          content: "You are a sales coach. Analyze this sales roleplay transcript and provide constructive feedback on communication skills, persuasion techniques, and areas for improvement. Keep it concise and actionable."
+          content: "You are a sales coach. Analyze this sales roleplay conversation and provide constructive feedback on communication skills, persuasion techniques, and areas for improvement. Keep it concise and actionable."
         }, {
           role: "user",
-          content: `Please analyze this sales conversation transcript: ${redactedTranscript.substring(0, 2000)}`
+          content: `Please analyze this sales conversation:\n\n${conversationText.substring(0, 2000)}`
         }],
-        max_tokens: 500
+        max_tokens: 300
       });
       
       aiFeedback = completion.choices[0].message.content;
@@ -351,6 +365,9 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
       session.set('status', 'completed');
       session.set('transcript', redactedTranscript);
       await session.save();
+      console.log('Session updated successfully'); // Debug
+    } else {
+      console.log('Session not found in sheets:', sessionId); // Debug
     }
     
     // Save feedback
@@ -363,8 +380,11 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
       fillerWordCount: analysis.fillerWordCount,
       confidenceScore: analysis.confidenceScore,
       aiFeedback: aiFeedback,
+      conversationLength: analysis.conversationLength || 0,
       keyMetrics: JSON.stringify(analysis)
     });
+    
+    console.log('Feedback saved successfully'); // Debug
     
     res.json({
       analysis: {
@@ -374,10 +394,9 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error ending session:', error);
-    res.status(500).json({ error: 'Failed to end session' });
+    res.status(500).json({ error: 'Failed to end session', details: error.message });
   }
 });
-
 // Get user sessions
 app.get('/api/sessions/history', authenticateToken, async (req, res) => {
   try {
