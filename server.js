@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 const corsOptions = {
   origin: [
-    'https://sales-roleplay-frontend.vercel.app', // Replace with your actual Vercel URL
+    'https://sales-roleplay-frontend.vercel.app',
     'http://localhost:3000',
     'https://localhost:3000'
   ],
