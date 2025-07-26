@@ -105,7 +105,7 @@ async function authenticateToken(req, res, next) {
 }
 
 // Routes
-// Add after your existing routes
+// Open AI Chat
 app.post('/api/ai/chat', authenticateToken, async (req, res) => {
   try {
     const { sessionId, userMessage, scenarioId, conversationHistory = [] } = req.body;
@@ -113,38 +113,54 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
     // Get scenario details
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
     const rows = await scenariosSheet.getRows();
-    const scenario = rows.find(row => row.get('id') === scenarioId);
+    const scenario = rows.find(row => 
+      row.get('scenario_id') === scenarioId || 
+      row.get('id') === scenarioId ||
+      row.rowNumber.toString() === scenarioId
+    );
     
     if (!scenario) {
       return res.status(404).json({ error: 'Scenario not found' });
     }
     
-    // Build conversation context
-    const systemPrompt = `You are ${scenario.get('title')} roleplay scenario. 
-    
-Character Details:
-- Name: Sarah Mitchell (Busy IT Director)
-- Company: Mid-size tech company (200 employees)
-- Personality: Skeptical, budget-conscious, time-pressed, results-oriented
-- Background: Had bad experiences with previous vendors, values efficiency
-- Current Situation: Evaluating new solutions but very busy
-- Pain Points: Current system is outdated, team productivity issues, budget constraints
+    // Build Google Ads-specific system prompt
+    const systemPrompt = `You are ${scenario.get('ai_character_name')}, a ${scenario.get('ai_character_role')}.
 
-Instructions:
-- Respond as Sarah would in a real sales call
-- Be naturally skeptical but not hostile
-- Ask realistic business questions
-- Bring up common objections (budget, timing, current solutions)
-- Keep responses conversational and realistic (2-3 sentences max)
-- Show interest if the salesperson addresses your concerns well
-- Be more receptive if they demonstrate value and understanding
+CHARACTER DETAILS:
+- Personality: ${scenario.get('ai_character_personality')}
+- Background: ${scenario.get('ai_character_background')}
+- Business Type: ${scenario.get('business_vertical')}
+- Buyer Persona: ${scenario.get('buyer_persona')}
 
-Remember: You're in the middle of a busy workday and this is an unscheduled sales call.`;
+GOOGLE ADS CONTEXT:
+- Focus Area: ${scenario.get('google_ads_focus')}
+- Key Objections: ${scenario.get('key_objections')}
+- Your Goal: Test the seller's ability in ${scenario.get('sales_skill_area')}
 
-    // Build conversation history for context
+ROLEPLAY INSTRUCTIONS:
+${scenario.get('ai_prompts')}
+
+OBJECTION BEHAVIOR:
+- Start skeptical but soften if they demonstrate good discovery skills
+- Bring up specific Google Ads concerns: budget, complexity, past bad experiences
+- Ask realistic business questions about ROI, timeline, and competition
+- Show interest if they explain concepts clearly and address your specific business needs
+- Be more resistant if they use jargon without explanation
+
+GOOGLE ADS OBJECTIONS TO USE:
+- "I tried Google Ads before and lost money"
+- "Isn't Facebook advertising cheaper?"
+- "I don't understand all those bidding strategies"
+- "How do I know if my ads are working?"
+- "My competitor's ads always show up first"
+
+Keep responses natural, 1-2 sentences, and stay in character throughout.`;
+
+    // Limit conversation history and add context
+    const recentHistory = conversationHistory.slice(-8);
     const messages = [
       { role: "system", content: systemPrompt },
-      ...conversationHistory.map(msg => ({
+      ...recentHistory.map(msg => ({
         role: msg.speaker === 'user' ? 'user' : 'assistant',
         content: msg.message
       })),
@@ -154,32 +170,44 @@ Remember: You're in the middle of a busy workday and this is an unscheduled sale
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: messages,
-      max_tokens: 150,
-      temperature: 0.8 // Add some personality variation
+      max_tokens: 120,
+      temperature: 0.8
     });
     
     const aiResponse = completion.choices[0].message.content;
     
-    // Log conversation for analysis
-    const feedbackSheet = doc.sheetsByTitle['Feedback'];
-    await feedbackSheet.addRow({
-      sessionId: sessionId,
-      userId: req.user.uid,
-      timestamp: new Date().toISOString(),
-      userMessage: userMessage,
-      aiResponse: aiResponse,
-      scenario: scenarioId
-    });
+    // Save conversation with Google Ads context
+    try {
+      const feedbackSheet = doc.sheetsByTitle['Feedback'];
+      await feedbackSheet.addRow({
+        feedback_id: `feedback_${sessionId}_${Date.now()}`,
+        session_id: sessionId,
+        user_id: req.user.uid,
+        timestamp: new Date().toISOString(),
+        feedback_type: 'Real-time Conversation',
+        userMessage: userMessage,
+        aiResponse: aiResponse,
+        scenario_id: scenarioId,
+        sales_skill_area: scenario.get('sales_skill_area'),
+        google_ads_focus: scenario.get('google_ads_focus')
+      });
+    } catch (feedbackError) {
+      console.error('Error saving conversation (non-critical):', feedbackError);
+    }
     
     res.json({
       response: aiResponse,
-      character: "Sarah Mitchell",
-      emotion: "neutral" // Can be enhanced later
+      character: scenario.get('ai_character_name'),
+      skill_area: scenario.get('sales_skill_area')
     });
     
   } catch (error) {
-    console.error('Error generating AI response:', error);
-    res.status(500).json({ error: 'Failed to generate AI response' });
+    console.error('Error in /api/ai/chat:', error);
+    res.json({
+      response: "I'm sorry, I'm having trouble connecting right now. Could you repeat that?",
+      character: "AI Assistant",
+      error: true
+    });
   }
 });
 // Health check
@@ -223,16 +251,44 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 // Get scenarios
 app.get('/api/scenarios', authenticateToken, async (req, res) => {
   try {
+    const { skill_area, difficulty, vertical } = req.query;
+    
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
     const rows = await scenariosSheet.getRows();
     
-    const scenarios = rows.map(row => ({
-      id: row.get('id') || row.rowNumber,
-      title: row.get('title'),
-      description: row.get('description'),
-      difficulty: row.get('difficulty') || 'Medium',
-      category: row.get('category') || 'General'
-    }));
+    let scenarios = rows
+      .filter(row => row.get('is_active') === 'TRUE')
+      .map(row => ({
+        scenario_id: row.get('scenario_id'),
+        title: row.get('title'),
+        description: row.get('description'),
+        difficulty: row.get('difficulty'),
+        category: row.get('category'),
+        sales_skill_area: row.get('sales_skill_area'),
+        buyer_persona: row.get('buyer_persona'),
+        google_ads_focus: row.get('google_ads_focus'),
+        business_vertical: row.get('business_vertical'),
+        campaign_complexity: row.get('campaign_complexity'),
+        ai_character_name: row.get('ai_character_name'),
+        ai_character_role: row.get('ai_character_role'),
+        estimated_duration: parseInt(row.get('estimated_duration')) || 10,
+        scenario_objectives: row.get('scenario_objectives'),
+        key_objections: row.get('key_objections') ? JSON.parse(row.get('key_objections')) : [],
+        coaching_focus: row.get('coaching_focus')
+      }));
+    
+    // Apply filters
+    if (skill_area && skill_area !== 'all') {
+      scenarios = scenarios.filter(s => s.sales_skill_area === skill_area);
+    }
+    
+    if (difficulty && difficulty !== 'all') {
+      scenarios = scenarios.filter(s => s.difficulty === difficulty);
+    }
+    
+    if (vertical && vertical !== 'all') {
+      scenarios = scenarios.filter(s => s.business_vertical === vertical);
+    }
     
     res.json(scenarios);
   } catch (error) {
@@ -397,6 +453,130 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to end session', details: error.message });
   }
 });
+// Google Ads-specific session analysis
+app.post('/api/sessions/analyze-google-ads', authenticateToken, async (req, res) => {
+  try {
+    const { sessionId, transcript, conversationHistory, scenarioId } = req.body;
+    
+    // Get scenario context
+    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    const rows = await scenariosSheet.getRows();
+    const scenario = rows.find(row => row.get('scenario_id') === scenarioId);
+    
+    // Google Ads specific analysis
+    const googleAdsAnalysis = analyzeGoogleAdsPerformance(transcript, conversationHistory, scenario);
+    
+    // Enhanced AI feedback with Google Ads coaching
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{
+        role: "system",
+        content: `You are a Google Ads sales coach. Analyze this roleplay performance and provide specific feedback on:
+        
+        1. Google Ads product knowledge accuracy
+        2. Objection handling for digital advertising concerns  
+        3. Discovery questions for understanding client needs
+        4. Explanation clarity of technical concepts
+        5. Business value demonstration
+        
+        Be specific about what they did well and what to improve. Focus on Google Ads selling skills.
+        
+        Scenario: ${scenario?.get('title')}
+        Skill Area: ${scenario?.get('sales_skill_area')}
+        Buyer Persona: ${scenario?.get('buyer_persona')}`
+      }, {
+        role: "user",
+        content: `Analyze this Google Ads sales conversation:\n\n${conversationHistory.map(msg => 
+          `${msg.speaker === 'user' ? 'Seller' : 'Buyer'}: ${msg.message}`
+        ).join('\n')}`
+      }],
+      max_tokens: 400
+    });
+    
+    const aiFeedback = completion.choices[0].message.content;
+    
+    res.json({
+      analysis: {
+        ...googleAdsAnalysis,
+        aiFeedback,
+        skillArea: scenario?.get('sales_skill_area'),
+        coachingRecommendations: generateCoachingRecommendations(googleAdsAnalysis)
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error analyzing Google Ads performance:', error);
+    res.status(500).json({ error: 'Failed to analyze performance' });
+  }
+});
+
+// Google Ads performance analysis function
+function analyzeGoogleAdsPerformance(transcript, conversationHistory, scenario) {
+  const userMessages = conversationHistory.filter(msg => msg.speaker === 'user');
+  const allUserText = userMessages.map(msg => msg.message).join(' ').toLowerCase();
+  
+  // Google Ads concept recognition
+  const googleAdsConcepts = [
+    'quality score', 'cpc', 'ctr', 'roas', 'performance max', 'smart campaigns',
+    'search campaigns', 'display network', 'youtube ads', 'shopping campaigns',
+    'keyword research', 'negative keywords', 'bidding strategy', 'ad extensions',
+    'conversion tracking', 'remarketing', 'audience targeting', 'budget optimization'
+  ];
+  
+  const conceptsUsed = googleAdsConcepts.filter(concept => 
+    allUserText.includes(concept.toLowerCase())
+  );
+  
+  // Discovery questions analysis
+  const discoveryQuestions = userMessages.filter(msg => 
+    msg.message.includes('?') && (
+      msg.message.toLowerCase().includes('goal') ||
+      msg.message.toLowerCase().includes('currently') ||
+      msg.message.toLowerCase().includes('budget') ||
+      msg.message.toLowerCase().includes('target') ||
+      msg.message.toLowerCase().includes('competition')
+    )
+  ).length;
+  
+  // Objection handling detection
+  const objectionHandling = userMessages.filter(msg =>
+    msg.message.toLowerCase().includes('understand') ||
+    msg.message.toLowerCase().includes('let me explain') ||
+    msg.message.toLowerCase().includes('for example') ||
+    msg.message.toLowerCase().includes('actually')
+  ).length;
+  
+  // Calculate scores (1-5 scale)
+  return {
+    discovery_score: Math.min(5, Math.max(1, Math.ceil(discoveryQuestions / 2))),
+    product_knowledge_score: Math.min(5, Math.max(1, conceptsUsed.length)),
+    objection_handling_score: Math.min(5, Math.max(1, objectionHandling)),
+    solution_fit_score: Math.min(5, Math.max(1, conceptsUsed.includes('performance max') || conceptsUsed.includes('smart campaigns') ? 4 : 2)),
+    clarity_confidence_score: Math.min(5, Math.max(1, Math.ceil(userMessages.length / 3))),
+    overall_effectiveness_score: Math.min(5, Math.max(1, Math.ceil((discoveryQuestions + conceptsUsed.length + objectionHandling) / 3))),
+    google_ads_concepts_used: conceptsUsed,
+    conversation_length: conversationHistory.length,
+    user_message_count: userMessages.length
+  };
+}
+
+function generateCoachingRecommendations(analysis) {
+  const recommendations = [];
+  
+  if (analysis.discovery_score < 3) {
+    recommendations.push("Practice asking more discovery questions about client goals and current marketing");
+  }
+  
+  if (analysis.product_knowledge_score < 3) {
+    recommendations.push("Study Google Ads products: Performance Max, Smart Campaigns, and Search Campaigns");
+  }
+  
+  if (analysis.objection_handling_score < 3) {
+    recommendations.push("Work on addressing budget and ROI concerns with examples and case studies");
+  }
+  
+  return recommendations;
+}
 // Get user sessions
 app.get('/api/sessions/history', authenticateToken, async (req, res) => {
   try {
