@@ -493,16 +493,25 @@ app.post('/api/sessions/end', authenticateToken, async (req, res) => {
     });
     
     console.log('Feedback saved successfully'); // Debug
+    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    const scenarioRows = await scenariosSheet.getRows();
+    const scenario = scenarioRows.find(row => 
+      row.get('scenario_id') === scenarioId || 
+      row.get('id') === scenarioId
+    );
     
     res.json({
       analysis: {
         ...analysis,
-        aiFeedback: aiFeedback
+        aiFeedback: aiFeedback,
+        skillArea: scenario?.get('sales_skill_area') || 'Sales Skills', // Add this
+        scenarioTitle: scenario?.get('title') || 'Practice Session'
       }
     });
+    
   } catch (error) {
     console.error('Error ending session:', error);
-    res.status(500).json({ error: 'Failed to end session', details: error.message });
+    res.status(500).json({ error: 'Failed to end session' });
   }
 });
 // Google Ads-specific session analysis
