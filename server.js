@@ -154,7 +154,6 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
     const googleAdsFocus = scenario.get('google_ads_focus') || 'General Marketing';
     const businessVertical = scenario.get('business_vertical') || 'General Business';
     const keyObjections = scenario.get('key_objections') || '[]';
-    const scenarioObjectives = scenario.get('scenario_objectives') || 'Practice sales conversation';
     
     // Parse key objections safely
     let objections = [];
@@ -163,141 +162,104 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
         objections = JSON.parse(keyObjections);
       }
     } catch (e) {
-      console.log('⚠️ Could not parse key objections, using defaults');
       objections = ["I'm not sure we need this", "It sounds expensive", "We're happy with our current solution"];
     }
     
-    // Build comprehensive system prompt - FIXED to prevent role confusion
+    // COMPLETELY NEW APPROACH - Build system prompt without confusing conversation history
     let systemPrompt = '';
     
-    // Special handling for introduction
     if (userMessage === 'SYSTEM_INTRODUCTION') {
       systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
 
-CRITICAL: You are ONLY the CUSTOMER/PROSPECT. You are NOT the salesperson.
+You are receiving a sales call about Google Ads services. Give a brief, natural greeting as this character would.
 
-Character Profile:
-- Name: ${characterName}
-- Role: ${characterRole}  
-- Personality: ${characterPersonality}
-- Background: ${characterBackground}
-- Company Type: ${businessVertical}
+Character: ${characterPersonality}
+Keep it under 2 sentences and act according to your personality.
 
-This is a ${salesSkillArea} training scenario for Google Ads sales practice.
-
-Give a brief, realistic introduction as this customer character would when receiving a sales call. 
-Keep it under 2 sentences. Act according to your personality.
-
-NEVER act as the salesperson or give sales advice. You are the customer being sold to.`;
-
+You are the CUSTOMER, not the salesperson.`;
     } else {
-      // Regular conversation system prompt - ENHANCED to prevent role confusion
+      // Count how many exchanges have happened for context
+      const exchangeCount = Math.floor(conversationHistory.length / 2);
+      
+      // Get the last thing the user (salesperson) said for immediate context
+      const lastUserMessage = conversationHistory
+        .filter(msg => msg.speaker === 'user')
+        .slice(-1)[0]?.message || '';
+      
       systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
 
-CRITICAL ROLE INSTRUCTIONS:
-- You are ONLY the CUSTOMER/PROSPECT being sold to
-- You are NOT the salesperson 
-- NEVER provide sales advice or sales techniques
-- NEVER act as if you're selling something
-- You are the person who RECEIVES the sales pitch
-- Respond ONLY as someone who might BUY the service
+SITUATION: You are on a sales call about ${googleAdsFocus} for your business.
+CONVERSATION STAGE: This is exchange #${exchangeCount + 1} of the call.
 
-Character Profile:
-- Name: ${characterName}
-- Role: ${characterRole}
+CHARACTER PROFILE:
 - Personality: ${characterPersonality}
-- Background: ${characterBackground}
-- Buyer Type: ${buyerPersona}
-- Company: ${businessVertical} business
+- Role: ${characterRole}
+- Business: ${businessVertical}
+- Potential objections: ${objections.slice(0, 3).join(', ')}
 
-Training Context: This is a ${salesSkillArea} practice session focused on ${googleAdsFocus}.
+THE SALESPERSON JUST SAID: "${userMessage}"
 
-Your Goal as the Customer:
-- Ask questions about how this helps YOUR business
-- Show appropriate skepticism when needed
-- Raise relevant objections: ${objections.join(', ')}
-- Be realistic about your business needs and budget concerns
-- React naturally to the salesperson's pitch
+YOUR ROLE AS THE CUSTOMER:
+- You are being SOLD TO, not selling anything
+- Respond naturally as a potential buyer would
+- Ask questions about how this helps YOUR specific business
+- Show appropriate interest, skepticism, or concern
+- Keep responses conversational (1-2 sentences)
+- Act according to your personality: ${characterPersonality}
 
-CONVERSATION RULES:
-1. You are being SOLD TO - not selling
-2. Ask "How does this help my ${businessVertical} business?"
-3. Show interest or concern based on what the salesperson says
-4. Keep responses 1-2 sentences maximum
-5. Stay in character as ${characterName} throughout
-6. NEVER give sales tips or advice - you're the customer!
-
-Current situation: A salesperson is trying to sell you ${googleAdsFocus} services for your ${businessVertical} business.`;
+Respond only as ${characterName} the customer. Do not act as the salesperson.`;
     }
 
-    // Build conversation messages for OpenAI - FIXED to maintain proper roles
+    // CRITICAL: Only send the current user message and system prompt
+    // Do NOT send conversation history to prevent AI confusion
     const messages = [
       { role: "system", content: systemPrompt }
     ];
     
-    // Add conversation history with STRICT role mapping to prevent confusion
-    const recentHistory = conversationHistory.slice(-6); // Last 6 messages only
-    recentHistory.forEach(msg => {
-      if (msg.speaker === 'user') {
-        // User is always the SALESPERSON in the OpenAI conversation
-        messages.push({ 
-          role: "user", 
-          content: `[Salesperson]: ${msg.message}` 
-        });
-      } else if (msg.speaker === 'ai') {
-        // AI is always the CUSTOMER in the OpenAI conversation
-        messages.push({ 
-          role: "assistant", 
-          content: `[${characterName} - Customer]: ${msg.message}` 
-        });
-      }
-    });
-    
-    // Add current user message (unless it's the special introduction trigger)
+    // Add ONLY the current user message (not the full history)
     if (userMessage !== 'SYSTEM_INTRODUCTION') {
       messages.push({ 
         role: "user", 
-        content: `[Salesperson]: ${userMessage}` 
+        content: userMessage 
       });
     }
     
-    console.log('🤖 Sending to OpenAI with', messages.length, 'messages');
-    console.log('🤖 Character Role: CUSTOMER -', characterName, '-', characterRole);
-    console.log('🤖 User Role: SALESPERSON');
-    console.log('🤖 Last message preview:', messages[messages.length - 1]?.content?.substring(0, 100));
+    console.log('🤖 Sending ONLY current message to OpenAI (no history)');
+    console.log('🤖 Character: CUSTOMER -', characterName);
+    console.log('🤖 User input:', userMessage.substring(0, 100));
     
     const completion = await openai.chat.completions.create({
-      model: "gpt-4", // Using GPT-4 for better conversation quality
+      model: "gpt-4",
       messages: messages,
-      max_tokens: 120, // Shorter responses to keep customer role focused
-      temperature: 0.7, // Slightly lower for more consistent character
-      presence_penalty: 0.2,
-      frequency_penalty: 0.2,
-      // Additional parameters to maintain role consistency
-      stop: ["[Salesperson]", "[Sales", "Here's how", "Let me show you"] // Stop if it tries to act as salesperson
+      max_tokens: 100, // Shorter to keep responses focused
+      temperature: 0.7,
+      presence_penalty: 0.0, // Removed to avoid repetition issues
+      frequency_penalty: 0.0, // Removed to avoid repetition issues
+      stop: ["Salesperson:", "User:", "[", "I recommend", "You should"] // Stop AI from acting as salesperson
     });
     
-    let aiResponse = completion.choices[0].message.content;
+    let aiResponse = completion.choices[0].message.content.trim();
     
-    // Clean up any role prefixes that might leak through
-    aiResponse = aiResponse.replace(/\[.*?\]:\s*/g, '').trim();
+    // Clean up any unwanted prefixes or role confusion
+    aiResponse = aiResponse.replace(/^(Customer:|AI:|Assistant:)\s*/i, '');
+    aiResponse = aiResponse.replace(/\[.*?\]/g, ''); // Remove any bracketed role indicators
     
-    // Additional safety check - if response seems like sales advice, replace it
-    const salesPhrases = [
-      'you should sell', 'try this approach', 'here\'s how to', 'the best way to sell',
-      'sales technique', 'closing strategy', 'pitch this way'
+    // Final safety check - if response contains sales language, replace it
+    const forbiddenPhrases = [
+      'let me show you', 'here\'s what you should do', 'i recommend', 
+      'the best approach', 'you need to', 'try this strategy'
     ];
     
-    const seemsLikeSalesAdvice = salesPhrases.some(phrase => 
+    const containsForbiddenLanguage = forbiddenPhrases.some(phrase => 
       aiResponse.toLowerCase().includes(phrase)
     );
     
-    if (seemsLikeSalesAdvice) {
-      console.log('⚠️ Detected sales advice in response, replacing...');
-      aiResponse = "I'm not sure I understand what you're offering. Can you explain how this specifically helps my business?";
+    if (containsForbiddenLanguage) {
+      console.log('⚠️ Detected sales language, using customer fallback');
+      aiResponse = "I'm not sure I understand how this helps my business. Can you explain more?";
     }
     
-    console.log('✅ AI Customer Response generated:', aiResponse.substring(0, 50) + '...');
+    console.log('✅ Customer response generated:', aiResponse);
     
     res.json({
       response: aiResponse,
@@ -308,8 +270,7 @@ Current situation: A salesperson is trying to sell you ${googleAdsFocus} service
   } catch (error) {
     console.error('❌ Error in /api/ai/chat:', error);
     
-    // Provide fallback response that maintains customer character
-    const fallbackResponse = "I'm sorry, I didn't catch that. Could you repeat what you're offering?";
+    const fallbackResponse = "Sorry, I didn't catch that. What exactly are you offering?";
     
     res.json({
       response: fallbackResponse,
