@@ -124,57 +124,28 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
   try {
     const { sessionId, userMessage, scenarioId, conversationHistory = [] } = req.body;
     
-    // Get scenario details
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
     const rows = await scenariosSheet.getRows();
     const scenario = rows.find(row => 
       row.get('scenario_id') === scenarioId || 
-      row.get('id') === scenarioId ||
-      row.rowNumber.toString() === scenarioId
+      row.get('id') === scenarioId
     );
     
     if (!scenario) {
       return res.status(404).json({ error: 'Scenario not found' });
     }
     
-    // Build Google Ads-specific system prompt
-    const systemPrompt = `You are ${scenario.get('ai_character_name')}, a ${scenario.get('ai_character_role')}.
+    // Use the detailed AI prompts from the sheet
+    const systemPrompt = scenario.get('ai_prompts') || 
+      `You are ${scenario.get('ai_character_name')}, a ${scenario.get('ai_character_role')}.
+       Personality: ${scenario.get('ai_character_personality')}
+       Background: ${scenario.get('ai_character_background')}
+       
+       Respond naturally as this character would. Keep responses 1-2 sentences.`;
 
-CHARACTER DETAILS:
-- Personality: ${scenario.get('ai_character_personality')}
-- Background: ${scenario.get('ai_character_background')}
-- Business Type: ${scenario.get('business_vertical')}
-- Buyer Persona: ${scenario.get('buyer_persona')}
-
-GOOGLE ADS CONTEXT:
-- Focus Area: ${scenario.get('google_ads_focus')}
-- Key Objections: ${scenario.get('key_objections')}
-- Your Goal: Test the seller's ability in ${scenario.get('sales_skill_area')}
-
-ROLEPLAY INSTRUCTIONS:
-${scenario.get('ai_prompts')}
-
-OBJECTION BEHAVIOR:
-- Start skeptical but soften if they demonstrate good discovery skills
-- Bring up specific Google Ads concerns: budget, complexity, past bad experiences
-- Ask realistic business questions about ROI, timeline, and competition
-- Show interest if they explain concepts clearly and address your specific business needs
-- Be more resistant if they use jargon without explanation
-
-GOOGLE ADS OBJECTIONS TO USE:
-- "I tried Google Ads before and lost money"
-- "Isn't Facebook advertising cheaper?"
-- "I don't understand all those bidding strategies"
-- "How do I know if my ads are working?"
-- "My competitor's ads always show up first"
-
-Keep responses natural, 1-2 sentences, and stay in character throughout.`;
-
-    // Limit conversation history and add context
-    const recentHistory = conversationHistory.slice(-8);
     const messages = [
       { role: "system", content: systemPrompt },
-      ...recentHistory.map(msg => ({
+      ...conversationHistory.slice(-6).map(msg => ({
         role: msg.speaker === 'user' ? 'user' : 'assistant',
         content: msg.message
       })),
@@ -190,37 +161,16 @@ Keep responses natural, 1-2 sentences, and stay in character throughout.`;
     
     const aiResponse = completion.choices[0].message.content;
     
-    // Save conversation with Google Ads context
-    try {
-      const feedbackSheet = doc.sheetsByTitle['Feedback'];
-      await feedbackSheet.addRow({
-        feedback_id: `feedback_${sessionId}_${Date.now()}`,
-        session_id: sessionId,
-        user_id: req.user.uid,
-        timestamp: new Date().toISOString(),
-        feedback_type: 'Real-time Conversation',
-        userMessage: userMessage,
-        aiResponse: aiResponse,
-        scenario_id: scenarioId,
-        sales_skill_area: scenario.get('sales_skill_area'),
-        google_ads_focus: scenario.get('google_ads_focus')
-      });
-    } catch (feedbackError) {
-      console.error('Error saving conversation (non-critical):', feedbackError);
-    }
-    
     res.json({
       response: aiResponse,
-      character: scenario.get('ai_character_name'),
-      skill_area: scenario.get('sales_skill_area')
+      character: scenario.get('ai_character_name')
     });
     
   } catch (error) {
     console.error('Error in /api/ai/chat:', error);
     res.json({
-      response: "I'm sorry, I'm having trouble connecting right now. Could you repeat that?",
-      character: "AI Assistant",
-      error: true
+      response: "I'm sorry, could you repeat that?",
+      character: "AI Assistant"
     });
   }
 });
@@ -265,44 +215,48 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 // Get scenarios
 app.get('/api/scenarios', authenticateToken, async (req, res) => {
   try {
-    console.log('🔍 Scenarios endpoint called by user:', req.user.uid);
-    
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
-    console.log('📊 Scenarios sheet found:', !!scenariosSheet);
-    
     const rows = await scenariosSheet.getRows();
-    console.log('📊 Raw rows from sheet:', rows.length);
-    console.log('📊 First row data:', rows[0] ? rows[0]._rawData : 'No rows');
     
     const scenarios = rows
-      .filter(row => row.get('is_active') !== 'FALSE') // Changed logic
-      .map(row => {
-        console.log('📊 Processing row:', row._rawData); // Debug each row
-        return {
-          scenario_id: row.get('scenario_id') || row.get('id') || row.rowNumber.toString(),
-          id: row.get('id') || row.get('scenario_id') || row.rowNumber.toString(),
-          title: row.get('title'),
-          description: row.get('description'),
-          difficulty: row.get('difficulty') || 'Medium',
-          category: row.get('category') || 'General',
-          sales_skill_area: row.get('sales_skill_area'),
-          buyer_persona: row.get('buyer_persona'),
-          google_ads_focus: row.get('google_ads_focus'),
-          business_vertical: row.get('business_vertical'),
-          ai_character_name: row.get('ai_character_name'),
-          ai_character_role: row.get('ai_character_role'),
-          estimated_duration: parseInt(row.get('estimated_duration')) || 10,
-          scenario_objectives: row.get('scenario_objectives')
-        };
-      });
-    
-    console.log('📊 Processed scenarios:', scenarios.length);
-    console.log('📊 Final scenarios data:', scenarios);
+      .filter(row => row.get('is_active') !== 'FALSE')
+      .map(row => ({
+        // Basic info
+        scenario_id: row.get('scenario_id') || row.get('id') || row.rowNumber.toString(),
+        id: row.get('id') || row.get('scenario_id') || row.rowNumber.toString(),
+        title: row.get('title'),
+        description: row.get('description'),
+        difficulty: row.get('difficulty') || 'Medium',
+        category: row.get('category') || 'General',
+        
+        // AI Character details
+        ai_character_name: row.get('ai_character_name'),
+        ai_character_role: row.get('ai_character_role'),
+        ai_character_personality: row.get('ai_character_personality'),
+        ai_character_background: row.get('ai_character_background'),
+        
+        // Google Ads specific
+        sales_skill_area: row.get('sales_skill_area'),
+        buyer_persona: row.get('buyer_persona'),
+        google_ads_focus: row.get('google_ads_focus'),
+        business_vertical: row.get('business_vertical'),
+        campaign_complexity: row.get('campaign_complexity'),
+        
+        // Training details
+        key_objections: row.get('key_objections') ? 
+          JSON.parse(row.get('key_objections').replace(/'/g, '"')) : [],
+        success_metrics: row.get('success_metrics'),
+        coaching_focus: row.get('coaching_focus'),
+        scenario_objectives: row.get('scenario_objectives'),
+        estimated_duration: parseInt(row.get('estimated_duration')) || 10,
+        ai_prompts: row.get('ai_prompts'),
+        usage_count: parseInt(row.get('usage_count')) || 0
+      }));
     
     res.json(scenarios);
   } catch (error) {
-    console.error('❌ Error fetching scenarios:', error);
-    res.status(500).json({ error: 'Failed to fetch scenarios', details: error.message });
+    console.error('Error fetching scenarios:', error);
+    res.status(500).json({ error: 'Failed to fetch scenarios' });
   }
 });
 
