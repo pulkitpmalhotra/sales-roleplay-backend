@@ -265,49 +265,87 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
 // Get scenarios
 app.get('/api/scenarios', authenticateToken, async (req, res) => {
   try {
-    const { skill_area, difficulty, vertical } = req.query;
+    console.log('🔍 Scenarios endpoint called by user:', req.user.uid);
     
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    console.log('📊 Scenarios sheet found:', !!scenariosSheet);
+    
     const rows = await scenariosSheet.getRows();
+    console.log('📊 Raw rows from sheet:', rows.length);
+    console.log('📊 First row data:', rows[0] ? rows[0]._rawData : 'No rows');
     
-    let scenarios = rows
-      .filter(row => row.get('is_active') === 'TRUE')
-      .map(row => ({
-        scenario_id: row.get('scenario_id'),
-        title: row.get('title'),
-        description: row.get('description'),
-        difficulty: row.get('difficulty'),
-        category: row.get('category'),
-        sales_skill_area: row.get('sales_skill_area'),
-        buyer_persona: row.get('buyer_persona'),
-        google_ads_focus: row.get('google_ads_focus'),
-        business_vertical: row.get('business_vertical'),
-        campaign_complexity: row.get('campaign_complexity'),
-        ai_character_name: row.get('ai_character_name'),
-        ai_character_role: row.get('ai_character_role'),
-        estimated_duration: parseInt(row.get('estimated_duration')) || 10,
-        scenario_objectives: row.get('scenario_objectives'),
-        key_objections: row.get('key_objections') ? JSON.parse(row.get('key_objections')) : [],
-        coaching_focus: row.get('coaching_focus')
-      }));
+    const scenarios = rows
+      .filter(row => row.get('is_active') !== 'FALSE') // Changed logic
+      .map(row => {
+        console.log('📊 Processing row:', row._rawData); // Debug each row
+        return {
+          scenario_id: row.get('scenario_id') || row.get('id') || row.rowNumber.toString(),
+          id: row.get('id') || row.get('scenario_id') || row.rowNumber.toString(),
+          title: row.get('title'),
+          description: row.get('description'),
+          difficulty: row.get('difficulty') || 'Medium',
+          category: row.get('category') || 'General',
+          sales_skill_area: row.get('sales_skill_area'),
+          buyer_persona: row.get('buyer_persona'),
+          google_ads_focus: row.get('google_ads_focus'),
+          business_vertical: row.get('business_vertical'),
+          ai_character_name: row.get('ai_character_name'),
+          ai_character_role: row.get('ai_character_role'),
+          estimated_duration: parseInt(row.get('estimated_duration')) || 10,
+          scenario_objectives: row.get('scenario_objectives')
+        };
+      });
     
-    // Apply filters
-    if (skill_area && skill_area !== 'all') {
-      scenarios = scenarios.filter(s => s.sales_skill_area === skill_area);
-    }
-    
-    if (difficulty && difficulty !== 'all') {
-      scenarios = scenarios.filter(s => s.difficulty === difficulty);
-    }
-    
-    if (vertical && vertical !== 'all') {
-      scenarios = scenarios.filter(s => s.business_vertical === vertical);
-    }
+    console.log('📊 Processed scenarios:', scenarios.length);
+    console.log('📊 Final scenarios data:', scenarios);
     
     res.json(scenarios);
   } catch (error) {
-    console.error('Error fetching scenarios:', error);
-    res.status(500).json({ error: 'Failed to fetch scenarios' });
+    console.error('❌ Error fetching scenarios:', error);
+    res.status(500).json({ error: 'Failed to fetch scenarios', details: error.message });
+  }
+});
+
+// Add this test endpoint to debug Google Sheets
+app.get('/api/test-sheets', authenticateToken, async (req, res) => {
+  try {
+    console.log('🧪 Testing Google Sheets connection...');
+    
+    // Test sheet access
+    const sheets = doc.sheetsByTitle;
+    console.log('📊 Available sheets:', Object.keys(sheets));
+    
+    // Test Scenarios sheet specifically
+    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    if (!scenariosSheet) {
+      return res.json({ error: 'Scenarios sheet not found', availableSheets: Object.keys(sheets) });
+    }
+    
+    const rows = await scenariosSheet.getRows();
+    console.log('📊 Raw rows count:', rows.length);
+    
+    // Show raw data for first few rows
+    const rawData = rows.slice(0, 3).map(row => ({
+      rowNumber: row.rowNumber,
+      rawData: row._rawData,
+      values: {
+        id: row.get('id'),
+        scenario_id: row.get('scenario_id'),
+        title: row.get('title'),
+        description: row.get('description')
+      }
+    }));
+    
+    res.json({
+      success: true,
+      sheetsFound: Object.keys(sheets),
+      rowsCount: rows.length,
+      sampleData: rawData
+    });
+    
+  } catch (error) {
+    console.error('❌ Sheets test error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
