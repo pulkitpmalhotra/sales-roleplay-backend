@@ -118,7 +118,7 @@ async function authenticateToken(req, res, next) {
   }
 }
 
-// Routes
+
 // Open AI Chat
 app.post('/api/ai/chat', authenticateToken, async (req, res) => {
   try {
@@ -174,6 +174,63 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
     });
   }
 });
+// Session Analysis Function
+function analyzeSession(transcript, conversationHistory = []) {
+  console.log('🔍 Analyzing session with conversation length:', conversationHistory.length);
+  
+  if (!transcript && conversationHistory.length === 0) {
+    return {
+      talkTimeRatio: 50,
+      fillerWordCount: 0,
+      confidenceScore: 50,
+      wordCount: 0,
+      averageSentenceLength: 0,
+      conversationLength: 0
+    };
+  }
+  
+  // Use conversation history if available, fallback to transcript
+  let textToAnalyze = transcript;
+  if (conversationHistory.length > 0) {
+    textToAnalyze = conversationHistory
+      .filter(msg => msg.speaker === 'user')
+      .map(msg => msg.message)
+      .join(' ');
+  }
+  
+  const words = textToAnalyze.toLowerCase().split(/\s+/).filter(word => word.length > 0);
+  const sentences = textToAnalyze.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  
+  // Count filler words
+  const fillerWords = ['um', 'uh', 'like', 'you know', 'basically', 'literally', 'actually'];
+  const fillerWordCount = words.filter(word => 
+    fillerWords.some(filler => word.includes(filler))
+  ).length;
+  
+  // Calculate confidence score
+  const fillerRatio = words.length > 0 ? fillerWordCount / words.length : 0;
+  const confidenceScore = Math.max(20, Math.min(100, 100 - (fillerRatio * 200)));
+  
+  // Calculate average sentence length
+  const averageSentenceLength = sentences.length > 0 ? 
+    words.length / sentences.length : 0;
+  
+  // Estimate talk time based on conversation balance
+  const userMessages = conversationHistory.filter(msg => msg.speaker === 'user').length;
+  const totalMessages = conversationHistory.length;
+  const estimatedTalkTime = totalMessages > 0 ? 
+    Math.round((userMessages / totalMessages) * 100) : 50;
+  
+  return {
+    talkTimeRatio: estimatedTalkTime,
+    fillerWordCount: fillerWordCount,
+    confidenceScore: Math.round(confidenceScore),
+    wordCount: words.length,
+    averageSentenceLength: Math.round(averageSentenceLength * 10) / 10,
+    conversationLength: conversationHistory.length
+  };
+}
+// Routes
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'Server is running', timestamp: new Date().toISOString() });
@@ -810,46 +867,7 @@ app.get('/api/sessions/:sessionId/details', authenticateToken, async (req, res) 
     res.status(500).json({ error: 'Failed to fetch session details' });
   }
 });
-// Session Analysis Function
-function analyzeSession(transcript) {
-  if (!transcript) {
-    return {
-      talkTimeRatio: 0,
-      fillerWordCount: 0,
-      confidenceScore: 50,
-      wordCount: 0,
-      averageSentenceLength: 0
-    };
-  }
-  
-  const words = transcript.toLowerCase().split(/\s+/);
-  const sentences = transcript.split(/[.!?]+/).filter(s => s.trim().length > 0);
-  
-  // Count filler words
-  const fillerWords = ['um', 'uh', 'like', 'you know', 'basically', 'literally', 'actually'];
-  const fillerWordCount = words.filter(word => 
-    fillerWords.some(filler => word.includes(filler))
-  ).length;
-  
-  // Calculate confidence score (inverse relationship with filler words)
-  const fillerRatio = fillerWordCount / words.length;
-  const confidenceScore = Math.max(20, Math.min(100, 100 - (fillerRatio * 200)));
-  
-  // Calculate average sentence length
-  const averageSentenceLength = sentences.length > 0 ? 
-    words.length / sentences.length : 0;
-  
-  // Simple talk time estimation (this would be more accurate with audio analysis)
-  const estimatedTalkTime = Math.min(80, Math.max(20, words.length / 10));
-  
-  return {
-    talkTimeRatio: Math.round(estimatedTalkTime),
-    fillerWordCount: fillerWordCount,
-    confidenceScore: Math.round(confidenceScore),
-    wordCount: words.length,
-    averageSentenceLength: Math.round(averageSentenceLength * 10) / 10
-  };
-}
+
 
 // Initialize and start server
 async function startServer() {
