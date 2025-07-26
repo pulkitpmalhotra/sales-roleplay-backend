@@ -124,6 +124,13 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
   try {
     const { sessionId, userMessage, scenarioId, conversationHistory = [] } = req.body;
     
+    console.log('🤖 AI Chat Request:', {
+      sessionId,
+      userMessage: userMessage.substring(0, 50) + '...',
+      scenarioId,
+      historyLength: conversationHistory.length
+    });
+    
     const scenariosSheet = doc.sheetsByTitle['Scenarios'];
     const rows = await scenariosSheet.getRows();
     const scenario = rows.find(row => 
@@ -132,49 +139,139 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
     );
     
     if (!scenario) {
+      console.error('❌ Scenario not found:', scenarioId);
       return res.status(404).json({ error: 'Scenario not found' });
     }
     
-    // Use the detailed AI prompts from the sheet
-    const systemPrompt = scenario.get('ai_prompts') || 
-      `You are ${scenario.get('ai_character_name')}, a ${scenario.get('ai_character_role')}.
-       Personality: ${scenario.get('ai_character_personality')}
-       Background: ${scenario.get('ai_character_background')}
-       
-       Respond naturally as this character would. Keep responses 1-2 sentences.`;
+    // Get character details from scenario
+    const characterName = scenario.get('ai_character_name') || 'Alex Johnson';
+    const characterRole = scenario.get('ai_character_role') || 'Business Professional';
+    const characterPersonality = scenario.get('ai_character_personality') || 'Professional, helpful';
+    const characterBackground = scenario.get('ai_character_background') || 'Works in business';
+    const salesSkillArea = scenario.get('sales_skill_area') || 'General Sales';
+    const buyerPersona = scenario.get('buyer_persona') || 'Business Professional';
+    const googleAdsFocus = scenario.get('google_ads_focus') || 'General Marketing';
+    const businessVertical = scenario.get('business_vertical') || 'General Business';
+    const keyObjections = scenario.get('key_objections') || '[]';
+    const scenarioObjectives = scenario.get('scenario_objectives') || 'Practice sales conversation';
+    
+    // Parse key objections safely
+    let objections = [];
+    try {
+      if (keyObjections && keyObjections !== '[]') {
+        objections = JSON.parse(keyObjections);
+      }
+    } catch (e) {
+      console.log('⚠️ Could not parse key objections, using defaults');
+      objections = ["I'm not sure we need this", "It sounds expensive", "We're happy with our current solution"];
+    }
+    
+    // Build comprehensive system prompt based on scenario data
+    let systemPrompt = '';
+    
+    // Special handling for introduction
+    if (userMessage === 'SYSTEM_INTRODUCTION') {
+      systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
 
+Character Profile:
+- Personality: ${characterPersonality}
+- Background: ${characterBackground}
+- Role: ${characterRole}
+
+This is a ${salesSkillArea} training scenario for Google Ads sales practice.
+Focus Area: ${googleAdsFocus}
+
+You need to give a brief, realistic introduction as this character would when receiving a sales call. 
+Keep it natural and under 2 sentences. Act according to your personality - if you're busy/skeptical, show it. If you're friendly, show that instead.
+
+DO NOT mention Google Ads or specific products yet - the salesperson should discover your needs first.
+Just introduce yourself naturally as a potential customer would.`;
+    } else {
+      // Regular conversation system prompt
+      systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
+
+Character Profile:
+- Personality: ${characterPersonality}
+- Background: ${characterBackground}
+- Role: ${characterRole}
+- Buyer Persona: ${buyerPersona}
+
+This is a ${salesSkillArea} training scenario focused on: ${googleAdsFocus}
+
+Scenario Objectives: ${scenarioObjectives}
+
+Common Objections You Might Raise: ${objections.join(', ')}
+
+CRITICAL INSTRUCTIONS:
+1. You are ONLY the customer/prospect - never speak as the salesperson
+2. Respond naturally as this character would in a real business conversation
+3. Be realistic about your business needs and concerns
+4. Ask relevant questions about how this solution helps your specific ${businessVertical} business
+5. Show appropriate skepticism and raise objections when they make sense
+6. Keep responses conversational and under 2-3 sentences
+7. Stay in character throughout the entire conversation
+8. DO NOT provide sales advice or coach the salesperson - you are the customer
+
+Current conversation context: This is a ${salesSkillArea} practice session where a salesperson is trying to help your ${businessVertical} business with ${googleAdsFocus}.`;
+    }
+
+    // Build conversation messages for OpenAI
     const messages = [
-      { role: "system", content: systemPrompt },
-      ...conversationHistory.slice(-6).map(msg => ({
-        role: msg.speaker === 'user' ? 'user' : 'assistant',
-        content: msg.message
-      })),
-      { role: "user", content: userMessage }
+      { role: "system", content: systemPrompt }
     ];
     
+    // Add conversation history, but only recent messages to stay within token limits
+    const recentHistory = conversationHistory.slice(-8); // Last 8 messages
+    recentHistory.forEach(msg => {
+      if (msg.speaker === 'user') {
+        messages.push({ role: "user", content: msg.message });
+      } else if (msg.speaker === 'ai') {
+        messages.push({ role: "assistant", content: msg.message });
+      }
+    });
+    
+    // Add current user message (unless it's the special introduction trigger)
+    if (userMessage !== 'SYSTEM_INTRODUCTION') {
+      messages.push({ role: "user", content: userMessage });
+    }
+    
+    console.log('🤖 Sending to OpenAI with', messages.length, 'messages');
+    console.log('🤖 Character:', characterName, '-', characterRole);
+    console.log('🤖 Skill Area:', salesSkillArea);
+    
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4", // Using GPT-4 for better conversation quality
       messages: messages,
-      max_tokens: 120,
-      temperature: 0.8
+      max_tokens: 150,
+      temperature: 0.8,
+      presence_penalty: 0.3,
+      frequency_penalty: 0.3
     });
     
     const aiResponse = completion.choices[0].message.content;
     
+    console.log('✅ AI Response generated:', aiResponse.substring(0, 50) + '...');
+    
     res.json({
       response: aiResponse,
-      character: scenario.get('ai_character_name')
+      character: characterName,
+      characterRole: characterRole
     });
     
   } catch (error) {
-    console.error('Error in /api/ai/chat:', error);
+    console.error('❌ Error in /api/ai/chat:', error);
+    
+    // Provide fallback response that maintains character
+    const fallbackResponse = "I'm sorry, could you repeat that? I want to make sure I understand what you're offering.";
+    
     res.json({
-      response: "I'm sorry, could you repeat that?",
+      response: fallbackResponse,
       character: "AI Assistant"
     });
   }
 });
-// Session Analysis Function
+
+// Session Analysis Function - UPDATED to remove Sarah Mitchell references
 function analyzeSession(transcript, conversationHistory = []) {
   console.log('🔍 Analyzing session with conversation length:', conversationHistory.length);
   
@@ -727,7 +824,10 @@ function analyzeGoogleAdsPerformance(transcript, conversationHistory, scenario) 
       msg.message.toLowerCase().includes('currently') ||
       msg.message.toLowerCase().includes('budget') ||
       msg.message.toLowerCase().includes('target') ||
-      msg.message.toLowerCase().includes('competition')
+      msg.message.toLowerCase().includes('competition') ||
+      msg.message.toLowerCase().includes('challenge') ||
+      msg.message.toLowerCase().includes('measure') ||
+      msg.message.toLowerCase().includes('success')
     )
   ).length;
   
@@ -736,7 +836,19 @@ function analyzeGoogleAdsPerformance(transcript, conversationHistory, scenario) 
     msg.message.toLowerCase().includes('understand') ||
     msg.message.toLowerCase().includes('let me explain') ||
     msg.message.toLowerCase().includes('for example') ||
-    msg.message.toLowerCase().includes('actually')
+    msg.message.toLowerCase().includes('actually') ||
+    msg.message.toLowerCase().includes('what i mean') ||
+    msg.message.toLowerCase().includes('let me show you')
+  ).length;
+  
+  // Business value demonstration
+  const businessValueMentions = userMessages.filter(msg =>
+    msg.message.toLowerCase().includes('roi') ||
+    msg.message.toLowerCase().includes('return') ||
+    msg.message.toLowerCase().includes('revenue') ||
+    msg.message.toLowerCase().includes('growth') ||
+    msg.message.toLowerCase().includes('customers') ||
+    msg.message.toLowerCase().includes('sales')
   ).length;
   
   // Calculate scores (1-5 scale)
@@ -746,7 +858,8 @@ function analyzeGoogleAdsPerformance(transcript, conversationHistory, scenario) 
     objection_handling_score: Math.min(5, Math.max(1, objectionHandling)),
     solution_fit_score: Math.min(5, Math.max(1, conceptsUsed.includes('performance max') || conceptsUsed.includes('smart campaigns') ? 4 : 2)),
     clarity_confidence_score: Math.min(5, Math.max(1, Math.ceil(userMessages.length / 3))),
-    overall_effectiveness_score: Math.min(5, Math.max(1, Math.ceil((discoveryQuestions + conceptsUsed.length + objectionHandling) / 3))),
+    business_value_score: Math.min(5, Math.max(1, businessValueMentions)),
+    overall_effectiveness_score: Math.min(5, Math.max(1, Math.ceil((discoveryQuestions + conceptsUsed.length + objectionHandling + businessValueMentions) / 4))),
     google_ads_concepts_used: conceptsUsed,
     conversation_length: conversationHistory.length,
     user_message_count: userMessages.length
@@ -768,8 +881,12 @@ function generateCoachingRecommendations(analysis) {
     recommendations.push("Work on addressing budget and ROI concerns with examples and case studies");
   }
   
+  if (analysis.business_value_score < 3) {
+    recommendations.push("Focus more on business outcomes and ROI rather than just features");
+  }
+  
   return recommendations;
-}
+  }
 // Get user sessions
 app.get('/api/sessions/history', authenticateToken, async (req, res) => {
   try {
