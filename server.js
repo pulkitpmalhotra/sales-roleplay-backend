@@ -490,6 +490,74 @@ app.get('/api/sessions/history', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch session history' });
   }
 });
+app.get('/api/sessions/:sessionId/details', authenticateToken, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    const sessionsSheet = doc.sheetsByTitle['Sessions'];
+    const feedbackSheet = doc.sheetsByTitle['Feedback'];
+    const scenariosSheet = doc.sheetsByTitle['Scenarios'];
+    
+    const [sessionRows, feedbackRows, scenarioRows] = await Promise.all([
+      sessionsSheet.getRows(),
+      feedbackSheet.getRows(),
+      scenariosSheet.getRows()
+    ]);
+    
+    const session = sessionRows.find(row => 
+      row.get('id') === sessionId && row.get('userId') === req.user.uid
+    );
+    
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    
+    const feedback = feedbackRows.filter(f => f.get('sessionId') === sessionId);
+    const scenarioData = scenarioRows.find(s => 
+      s.get('id') === session.get('scenarioId') || 
+      s.rowNumber.toString() === session.get('scenarioId')
+    );
+    
+    // Get conversation history from feedback
+    const conversationHistory = feedback
+      .filter(f => f.get('userMessage') && f.get('aiResponse'))
+      .map(f => ({
+        userMessage: f.get('userMessage'),
+        aiResponse: f.get('aiResponse'),
+        timestamp: f.get('timestamp')
+      }))
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    
+    res.json({
+      session: {
+        id: session.get('id'),
+        startTime: session.get('startTime'),
+        endTime: session.get('endTime'),
+        duration: parseInt(session.get('duration')) || 0,
+        transcript: session.get('transcript'),
+        status: session.get('status')
+      },
+      scenario: scenarioData ? {
+        title: scenarioData.get('title'),
+        description: scenarioData.get('description'),
+        category: scenarioData.get('category'),
+        difficulty: scenarioData.get('difficulty'),
+        objectives: scenarioData.get('scenario_objectives')
+      } : null,
+      feedback: feedback.length > 0 ? {
+        talkTimeRatio: parseInt(feedback[0].get('talkTimeRatio')) || 0,
+        confidenceScore: parseInt(feedback[0].get('confidenceScore')) || 0,
+        fillerWordCount: parseInt(feedback[0].get('fillerWordCount')) || 0,
+        conversationLength: parseInt(feedback[0].get('conversationLength')) || 0,
+        aiFeedback: feedback[0].get('aiFeedback')
+      } : null,
+      conversationHistory
+    });
+  } catch (error) {
+    console.error('Error fetching session details:', error);
+    res.status(500).json({ error: 'Failed to fetch session details' });
+  }
+});
 // Session Analysis Function
 function analyzeSession(transcript) {
   if (!transcript) {
