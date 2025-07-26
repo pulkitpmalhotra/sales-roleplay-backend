@@ -285,11 +285,38 @@ app.get('/api/scenarios', authenticateToken, async (req, res) => {
           business_vertical: row.get('business_vertical') || 'General Business',
           campaign_complexity: row.get('campaign_complexity') || 'Beginner',
           
-          // Training details (safe with fallbacks)
+                   // Training details (safe with fallbacks)
           key_objections: keyObjections,
           success_metrics: row.get('success_metrics') || 'Complete the conversation successfully',
           coaching_focus: row.get('coaching_focus') || 'General communication skills',
-          scenario_ob
+          scenario_objectives: row.get('scenario_objectives') || 'Practice sales conversation',
+          estimated_duration: parseInt(row.get('estimated_duration')) || 10,
+          ai_prompts: row.get('ai_prompts') || `You are a professional business person having a conversation.`,
+          usage_count: parseInt(row.get('usage_count')) || 0,
+          is_active: row.get('is_active') !== 'FALSE' // Default to active unless explicitly FALSE
+        };
+        
+        scenarios.push(scenario);
+        console.log('✅ Successfully processed scenario:', scenario.title);
+        
+      } catch (rowError) {
+        console.error('❌ Error processing row', row.rowNumber, ':', rowError.message);
+        // Continue to next row instead of failing completely
+        continue;
+      }
+    }
+    
+    console.log('📊 Final scenarios count:', scenarios.length);
+    res.json(scenarios);
+    
+  } catch (error) {
+    console.error('❌ Fatal error in scenarios endpoint:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch scenarios', 
+      details: error.message 
+    });
+  }
+});
 // Add this test endpoint to debug Google Sheets
 app.get('/api/test-sheets', authenticateToken, async (req, res) => {
   try {
