@@ -291,23 +291,31 @@ Respond as ${characterName} would naturally respond to what was just said.`;
   }
 });
 
-// Session Analysis Function - UPDATED to remove Sarah Mitchell references
+// Enhanced Session Analysis Function with Google Ads specific scoring
 function analyzeSession(transcript, conversationHistory = []) {
+  console.log('🔍 ===== SESSION ANALYSIS START =====');
   console.log('🔍 Analyzing session with conversation length:', conversationHistory.length);
+  console.log('🔍 Transcript length:', transcript?.length || 0);
   
   if (!transcript && conversationHistory.length === 0) {
+    console.log('⚠️ No data to analyze, returning default scores');
     return {
       talkTimeRatio: 50,
       fillerWordCount: 0,
       confidenceScore: 50,
       wordCount: 0,
       averageSentenceLength: 0,
-      conversationLength: 0
+      conversationLength: 0,
+      discovery_score: 2,
+      product_knowledge_score: 2,
+      objection_handling_score: 2,
+      business_value_score: 2,
+      overall_effectiveness_score: 2
     };
   }
   
   // Use conversation history if available, fallback to transcript
-  let textToAnalyze = transcript;
+  let textToAnalyze = transcript || '';
   if (conversationHistory.length > 0) {
     textToAnalyze = conversationHistory
       .filter(msg => msg.speaker === 'user')
@@ -315,8 +323,18 @@ function analyzeSession(transcript, conversationHistory = []) {
       .join(' ');
   }
   
+  console.log('🔍 Text to analyze length:', textToAnalyze.length);
+  
   const words = textToAnalyze.toLowerCase().split(/\s+/).filter(word => word.length > 0);
   const sentences = textToAnalyze.split(/[.!?]+/).filter(s => s.trim().length > 0);
+  const userMessages = conversationHistory.filter(msg => msg.speaker === 'user');
+  
+  console.log('🔍 Analysis data:', {
+    wordCount: words.length,
+    sentenceCount: sentences.length,
+    userMessageCount: userMessages.length,
+    totalMessages: conversationHistory.length
+  });
   
   // Count filler words
   const fillerWords = ['um', 'uh', 'like', 'you know', 'basically', 'literally', 'actually'];
@@ -333,19 +351,98 @@ function analyzeSession(transcript, conversationHistory = []) {
     words.length / sentences.length : 0;
   
   // Estimate talk time based on conversation balance
-  const userMessages = conversationHistory.filter(msg => msg.speaker === 'user').length;
   const totalMessages = conversationHistory.length;
   const estimatedTalkTime = totalMessages > 0 ? 
-    Math.round((userMessages / totalMessages) * 100) : 50;
+    Math.round((userMessages.length / totalMessages) * 100) : 50;
   
-  return {
+  // Google Ads specific analysis
+  const allUserText = userMessages.map(msg => msg.message).join(' ').toLowerCase();
+  
+  // Google Ads concept recognition
+  const googleAdsConcepts = [
+    'quality score', 'cpc', 'ctr', 'roas', 'performance max', 'smart campaigns',
+    'search campaigns', 'display network', 'youtube ads', 'shopping campaigns',
+    'keyword research', 'negative keywords', 'bidding strategy', 'ad extensions',
+    'conversion tracking', 'remarketing', 'audience targeting', 'budget optimization',
+    'google ads', 'advertising', 'marketing', 'campaigns', 'keywords', 'budget'
+  ];
+  
+  const conceptsUsed = googleAdsConcepts.filter(concept => 
+    allUserText.includes(concept.toLowerCase())
+  );
+  
+  // Discovery questions analysis
+  const discoveryQuestions = userMessages.filter(msg => 
+    msg.message.includes('?') && (
+      msg.message.toLowerCase().includes('goal') ||
+      msg.message.toLowerCase().includes('currently') ||
+      msg.message.toLowerCase().includes('budget') ||
+      msg.message.toLowerCase().includes('target') ||
+      msg.message.toLowerCase().includes('competition') ||
+      msg.message.toLowerCase().includes('challenge') ||
+      msg.message.toLowerCase().includes('how') ||
+      msg.message.toLowerCase().includes('what') ||
+      msg.message.toLowerCase().includes('why') ||
+      msg.message.toLowerCase().includes('when') ||
+      msg.message.toLowerCase().includes('where')
+    )
+  ).length;
+  
+  // Objection handling detection
+  const objectionHandling = userMessages.filter(msg =>
+    msg.message.toLowerCase().includes('understand') ||
+    msg.message.toLowerCase().includes('let me explain') ||
+    msg.message.toLowerCase().includes('for example') ||
+    msg.message.toLowerCase().includes('actually') ||
+    msg.message.toLowerCase().includes('what i mean') ||
+    msg.message.toLowerCase().includes('let me show you') ||
+    msg.message.toLowerCase().includes('i see your point') ||
+    msg.message.toLowerCase().includes('that makes sense')
+  ).length;
+  
+  // Business value demonstration
+  const businessValueMentions = userMessages.filter(msg =>
+    msg.message.toLowerCase().includes('roi') ||
+    msg.message.toLowerCase().includes('return') ||
+    msg.message.toLowerCase().includes('revenue') ||
+    msg.message.toLowerCase().includes('growth') ||
+    msg.message.toLowerCase().includes('customers') ||
+    msg.message.toLowerCase().includes('sales') ||
+    msg.message.toLowerCase().includes('profit') ||
+    msg.message.toLowerCase().includes('increase') ||
+    msg.message.toLowerCase().includes('improve') ||
+    msg.message.toLowerCase().includes('results')
+  ).length;
+  
+  // Calculate scores (1-5 scale)
+  const discovery_score = Math.min(5, Math.max(1, Math.ceil(discoveryQuestions / 2) + 1));
+  const product_knowledge_score = Math.min(5, Math.max(1, conceptsUsed.length > 0 ? conceptsUsed.length + 1 : 1));
+  const objection_handling_score = Math.min(5, Math.max(1, objectionHandling > 0 ? objectionHandling + 2 : 1));
+  const business_value_score = Math.min(5, Math.max(1, businessValueMentions > 0 ? businessValueMentions + 2 : 1));
+  const overall_effectiveness_score = Math.min(5, Math.max(1, Math.ceil((discovery_score + product_knowledge_score + objection_handling_score + business_value_score) / 4)));
+  
+  const analysisResult = {
     talkTimeRatio: estimatedTalkTime,
     fillerWordCount: fillerWordCount,
     confidenceScore: Math.round(confidenceScore),
     wordCount: words.length,
     averageSentenceLength: Math.round(averageSentenceLength * 10) / 10,
-    conversationLength: conversationHistory.length
+    conversationLength: conversationHistory.length,
+    discovery_score: discovery_score,
+    product_knowledge_score: product_knowledge_score,
+    objection_handling_score: objection_handling_score,
+    business_value_score: business_value_score,
+    overall_effectiveness_score: overall_effectiveness_score,
+    google_ads_concepts_used: conceptsUsed,
+    discovery_questions_count: discoveryQuestions,
+    objection_handling_count: objectionHandling,
+    business_value_mentions: businessValueMentions
   };
+  
+  console.log('🔍 Analysis result:', analysisResult);
+  console.log('🔍 ===== SESSION ANALYSIS COMPLETE =====');
+  
+  return analysisResult;
 }
 // Routes
 // Health check
