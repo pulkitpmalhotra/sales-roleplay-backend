@@ -125,7 +125,7 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
   try {
     const { sessionId, userMessage, scenarioId, conversationHistory = [] } = req.body;
     
-    console.log('🤖 AI Chat Request:', {
+    console.log('🤖 AI Chat Request (User-initiated):', {
       sessionId,
       userMessage: userMessage.substring(0, 100) + '...',
       scenarioId,
@@ -165,35 +165,24 @@ app.post('/api/ai/chat', authenticateToken, async (req, res) => {
       objections = ["I'm not sure we need this", "It sounds expensive", "We're happy with our current solution"];
     }
     
-    // Build system prompt with better context
-    let systemPrompt = '';
+    // Get recent conversation context (USER messages only to avoid AI seeing its own responses)
+    const recentUserMessages = conversationHistory
+      .filter(msg => msg.speaker === 'user')
+      .slice(-3) // Last 3 user messages only
+      .map(msg => msg.message)
+      .join(' ... ');
     
-    if (userMessage === 'SYSTEM_INTRODUCTION') {
-      systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
+    const conversationContext = recentUserMessages ? 
+      `Previous conversation: The salesperson has mentioned "${recentUserMessages}"` : 
+      'This is the start of the conversation.';
+    
+    // Build system prompt for customer character responding to user-initiated conversation
+    const systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
 
-You just received a sales call. Introduce yourself naturally as this character would.
-
-Character: ${characterPersonality}
-Keep it brief (1-2 sentences) and act according to your personality.
-
-You are the CUSTOMER receiving the call, not the salesperson making it.`;
-    } else {
-      // Get recent conversation context (USER messages only to avoid AI seeing its own responses)
-      const recentUserMessages = conversationHistory
-        .filter(msg => msg.speaker === 'user')
-        .slice(-3) // Last 3 user messages only
-        .map(msg => msg.message)
-        .join(' ... ');
-      
-      const conversationContext = recentUserMessages ? 
-        `Recent conversation context: The salesperson has said "${recentUserMessages}"` : 
-        'This is early in the conversation.';
-      
-      systemPrompt = `You are ${characterName}, a ${characterRole} at a ${businessVertical} company.
-
-IMPORTANT: You are the CUSTOMER/PROSPECT being sold to. You are NOT the salesperson.
+IMPORTANT: You are the CUSTOMER/PROSPECT. The user is the SALESPERSON calling you.
 
 Character Details:
+- Name: ${characterName}
 - Personality: ${characterPersonality}
 - Role: ${characterRole}
 - Business: ${businessVertical} company
@@ -203,37 +192,29 @@ ${conversationContext}
 
 The salesperson just said: "${userMessage}"
 
-As the customer, respond naturally:
-- Ask questions about how this helps YOUR business
-- Show interest, skepticism, or concern based on your personality
-- Keep it conversational (1-2 sentences)
-- React to what the salesperson actually said
-- Stay in character as ${characterName}
+As the customer ${characterName}, respond naturally:
+- Ask questions about how this helps YOUR ${businessVertical} business
+- Show interest, skepticism, or concern based on your personality: ${characterPersonality}
+- Keep responses conversational (1-2 sentences)
+- React specifically to what the salesperson said
+- Stay in character throughout
 
-Respond only as the customer. Do not give sales advice or act as the salesperson.`;
-    }
+You are being SOLD TO. Do not give sales advice or act as the salesperson.`;
 
-    // Send system prompt and current message only (with limited context)
+    // Send system prompt and current message only
     const messages = [
       { role: "system", content: systemPrompt },
+      { role: "user", content: userMessage }
     ];
     
-    // Add current user message
-    if (userMessage !== 'SYSTEM_INTRODUCTION') {
-      messages.push({ 
-        role: "user", 
-        content: userMessage 
-      });
-    }
-    
-    console.log('🤖 Sending to OpenAI with context but no AI history');
-    console.log('🤖 Character:', characterName, 'responding to:', userMessage.substring(0, 50));
+    console.log('🤖 Sending user-initiated conversation to OpenAI');
+    console.log('🤖 Customer character:', characterName, 'responding to user input');
     
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: messages,
       max_tokens: 120,
-      temperature: 0.8, // Higher for more natural responses
+      temperature: 0.8, // Natural responses
       presence_penalty: 0.1,
       frequency_penalty: 0.1,
       stop: ["Salesperson:", "User:", "You should", "I recommend", "Let me sell you"]
@@ -245,7 +226,7 @@ Respond only as the customer. Do not give sales advice or act as the salesperson
     aiResponse = aiResponse.replace(/^(Customer:|AI:|Assistant:)\s*/i, '');
     aiResponse = aiResponse.replace(/\[.*?\]/g, '');
     
-    // More sophisticated validation - check if response is relevant to user input
+    // Ensure response is relevant to user input
     const isGenericFallback = [
       "sorry, i didn't catch that",
       "what exactly are you offering",
@@ -253,27 +234,23 @@ Respond only as the customer. Do not give sales advice or act as the salesperson
       "could you repeat that"
     ].some(phrase => aiResponse.toLowerCase().includes(phrase));
     
-    const isRelevantResponse = userMessage.length > 5 && 
-                              aiResponse.length > 10 && 
-                              !isGenericFallback;
-    
-    // Only use fallback if response is truly problematic
-    if (!isRelevantResponse && userMessage !== 'SYSTEM_INTRODUCTION') {
+    // Only use specific fallback if response is truly problematic
+    if (isGenericFallback && userMessage.length > 5) {
       console.log('⚠️ Generic response detected, creating specific customer response');
       
-      // Create a more specific customer response based on user input
-      if (userMessage.toLowerCase().includes('google ads') || userMessage.toLowerCase().includes('advertising')) {
-        aiResponse = `Advertising? Tell me more about what you're suggesting for my ${businessVertical} business.`;
+      // Create specific customer response based on user input
+      if (userMessage.toLowerCase().includes('hello') || userMessage.toLowerCase().includes('hi')) {
+        aiResponse = `Hello. What company are you calling from?`;
+      } else if (userMessage.toLowerCase().includes('google ads') || userMessage.toLowerCase().includes('advertising')) {
+        aiResponse = `Advertising for my ${businessVertical} business? Tell me more about what you're proposing.`;
       } else if (userMessage.toLowerCase().includes('help') || userMessage.toLowerCase().includes('solution')) {
-        aiResponse = `How exactly would this help my business? What kind of results are we talking about?`;
-      } else if (userMessage.toLowerCase().includes('hello') || userMessage.toLowerCase().includes('hi')) {
-        aiResponse = `Hello. What company are you calling from and what is this regarding?`;
+        aiResponse = `Help with what exactly? How would this benefit my ${businessVertical} business?`;
       } else {
-        aiResponse = `I'm listening. How does what you're proposing help my ${businessVertical} business specifically?`;
+        aiResponse = `I'm listening. How does what you're offering help my ${businessVertical} business specifically?`;
       }
     }
     
-    console.log('✅ Final customer response:', aiResponse);
+    console.log('✅ Customer response generated:', aiResponse);
     
     res.json({
       response: aiResponse,
@@ -282,10 +259,10 @@ Respond only as the customer. Do not give sales advice or act as the salesperson
     });
     
   } catch (error) {
-    console.error('❌ Error in /api/ai/chat:', error);
+    console.error('❌ Error in user-initiated AI chat:', error);
     
-    // Better fallback that's not generic
-    const fallbackResponse = `I'm sorry, there seems to be a connection issue. What company are you with?`;
+    // Natural customer fallback
+    const fallbackResponse = `I'm sorry, I didn't quite hear you clearly. What company are you calling from?`;
     
     res.json({
       response: fallbackResponse,
